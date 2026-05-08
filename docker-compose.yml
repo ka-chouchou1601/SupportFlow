@@ -1,0 +1,128 @@
+# =============================================================================
+# Docker Compose — SupportFlow
+# Orchestre 3 services qui communiquent sur un réseau Docker interne :
+#   1. backend  — API Symfony (PHP-FPM)
+#   2. frontend — Application React (Node.js dev server)
+#   3. database — Base de données MySQL 8
+#
+# Lancer l'environnement : docker-compose up -d
+# Arrêter l'environnement : docker-compose down
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # SERVICE BACKEND — Symfony PHP-FPM
+  # PHP-FPM (FastCGI Process Manager) est le mode recommandé pour Symfony en
+  # production. Il exécute PHP comme un service séparé, découplé du serveur web.
+  # En développement, "symfony serve" (CLI Symfony) peut être utilisé à la place.
+  # ---------------------------------------------------------------------------
+  backend:
+    # Image officielle PHP 8.2 avec FPM (FastCGI Process Manager)
+    # php:8.2-fpm est la version stable recommandée pour Symfony 8.x
+    image: php:8.2-fpm
+
+    # Port 8000 : exposé sur l'hôte pour accéder à l'API depuis le navigateur
+    # Format hôte:conteneur — on utilise le même port des deux côtés pour la clarté
+    ports:
+      - "8000:8000"
+
+    # Volume : monte le code source local dans le conteneur
+    # Cela permet d'éditer le code sans reconstruire l'image Docker
+    # ./backend = chemin relatif sur la machine hôte
+    # /var/www/html = répertoire de travail standard pour les applis PHP
+    volumes:
+      - ./backend:/var/www/html
+
+    # Le backend dépend de la base de données :
+    # Docker démarrera "database" avant "backend"
+    depends_on:
+      - database
+
+    # Réseau interne partagé par tous les services
+    # Permet au backend d'atteindre "database" par son nom de service
+    networks:
+      - supportflow_network
+
+  # ---------------------------------------------------------------------------
+  # SERVICE FRONTEND — React / Vite (Node.js)
+  # Serveur de développement Node.js pour le frontend React.
+  # En production, ce service serait remplacé par un build statique servi par Nginx.
+  # ---------------------------------------------------------------------------
+  frontend:
+    # Image officielle Node.js 18 en version Alpine (légère, basée sur Alpine Linux)
+    # Node 18 est la version LTS (Long Term Support) recommandée pour Vite
+    image: node:18-alpine
+
+    # Port 3000 : port standard du serveur de développement Vite/React
+    ports:
+      - "3000:3000"
+
+    # Volume : monte le code source React local dans le conteneur
+    # Tout changement de code est immédiatement visible dans le conteneur
+    volumes:
+      - ./frontend:/app
+
+    # Répertoire de travail dans le conteneur
+    working_dir: /app
+
+    # Commande par défaut : garde le conteneur en vie pendant le développement
+    # À remplacer par "npm run dev" une fois le projet React initialisé
+    command: sh -c "echo 'Frontend ready — run: npm create vite@latest . && npm run dev' && tail -f /dev/null"
+
+    networks:
+      - supportflow_network
+
+  # ---------------------------------------------------------------------------
+  # SERVICE DATABASE — MySQL 8
+  # Base de données relationnelle utilisée par Doctrine ORM (backend Symfony).
+  # Les données sont persistées dans un volume Docker nommé pour survivre
+  # aux redémarrages du conteneur.
+  # ---------------------------------------------------------------------------
+  database:
+    # Image officielle MySQL version 8.0 (version LTS stable)
+    image: mysql:8.0
+
+    # Port 3306 : port standard MySQL, exposé pour les outils externes
+    # (ex: DBeaver, TablePlus, phpMyAdmin) depuis la machine hôte
+    ports:
+      - "3306:3306"
+
+    # Variables d'environnement MySQL :
+    # Ces valeurs DOIVENT correspondre exactement à DATABASE_URL dans backend/.env
+    environment:
+      # Nom de la base de données créée automatiquement au premier démarrage
+      MYSQL_DATABASE: supportflow_db
+      # Utilisateur applicatif (non-root) utilisé par Symfony/Doctrine
+      MYSQL_USER: supportflow
+      # Mot de passe de l'utilisateur applicatif
+      MYSQL_PASSWORD: password
+      # Mot de passe root MySQL (nécessaire pour l'initialisation du conteneur)
+      # À changer en production et à stocker dans un secret Docker/Vault
+      MYSQL_ROOT_PASSWORD: rootpassword
+
+    # Volume nommé pour la persistance des données :
+    # Sans ce volume, toutes les données seraient perdues à chaque "docker-compose down"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+    networks:
+      - supportflow_network
+
+# =============================================================================
+# VOLUMES — Stockage persistant
+# Les volumes Docker survivent aux redémarrages et suppressions de conteneurs
+# =============================================================================
+volumes:
+  # Volume pour les données MySQL : persiste la base de données entre les sessions
+  mysql_data:
+    driver: local
+
+# =============================================================================
+# RÉSEAUX — Communication entre services
+# Le réseau bridge personnalisé isole les services SupportFlow des autres
+# conteneurs Docker sur la machine et permet la résolution DNS par nom de service
+# =============================================================================
+networks:
+  supportflow_network:
+    driver: bridge

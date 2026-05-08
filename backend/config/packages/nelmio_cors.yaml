@@ -1,0 +1,37 @@
+# =============================================================================
+# Configuration du bundle NelmioCorsBundle
+# Ce fichier contrôle les règles CORS (Cross-Origin Resource Sharing)
+# qui permettent au frontend React (port 3000) d'appeler l'API Symfony
+# depuis un navigateur, malgré la politique same-origin.
+# =============================================================================
+
+nelmio_cors:
+    defaults:
+        # origin_regex: true active la correspondance par expression régulière
+        # plutôt que par correspondance exacte d'URL
+        origin_regex: true
+
+        # allow_origin : liste des origines autorisées à faire des requêtes cross-origin
+        # La valeur vient de la variable d'environnement CORS_ALLOW_ORIGIN définie dans .env
+        # En développement on autorise explicitement http://localhost:3000 (frontend React/Vite)
+        allow_origin:
+            - 'http://localhost:3000'
+
+        # allow_methods : méthodes HTTP acceptées dans les requêtes cross-origin
+        allow_methods: ['GET', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']
+
+        # allow_headers : en-têtes HTTP autorisés dans les requêtes cross-origin
+        # Content-Type : nécessaire pour les requêtes JSON
+        # Authorization : nécessaire pour envoyer le token JWT/Bearer
+        allow_headers: ['Content-Type', 'Authorization']
+
+        # expose_headers : en-têtes que le navigateur est autorisé à lire dans la réponse
+        expose_headers: ['Link']
+
+        # max_age : durée (en secondes) pendant laquelle le navigateur met en cache
+        # le résultat de la requête preflight OPTIONS (ici 1 heure)
+        max_age: 3600
+
+    paths:
+        # '^/' : applique ces règles CORS à toutes les routes de l'API
+        '^/': null

@@ -1,0 +1,64 @@
+# =============================================================================
+# .gitignore — SupportFlow (racine du monorepo)
+# Exclut les fichiers générés, les secrets et les dépendances de chaque service
+# =============================================================================
+
+# --- Backend Symfony ---------------------------------------------------------
+
+# Dépendances PHP installées par Composer : ne jamais versionner
+# (se reconstruisent via "composer install")
+backend/vendor/
+
+# Fichiers générés à l'exécution : cache, logs, sessions
+# (se régénèrent via "php bin/console cache:clear")
+backend/var/
+
+# Fichier d'overrides locaux non-commité (contient souvent des secrets)
+# Chaque développeur a le sien, ne doit jamais être partagé
+backend/.env.local
+backend/.env.*.local
+
+# Assets publics compilés (se régénèrent via "php bin/console assets:install")
+backend/public/bundles/
+
+# --- Frontend React ----------------------------------------------------------
+
+# Dépendances Node.js installées par npm/yarn/pnpm
+# (se reconstruisent via "npm install")
+node_modules/
+frontend/node_modules/
+
+# Build de production React/Vite (généré par "npm run build")
+dist/
+frontend/dist/
+
+# Cache Vite
+frontend/.vite/
+
+# --- Docker ------------------------------------------------------------------
+
+# Override Docker Compose local (ports, volumes, credentials spécifiques à la machine)
+docker-compose.override.yml
+docker-compose.local.yml
+
+# --- Éditeurs et OS ----------------------------------------------------------
+
+# JetBrains (PHPStorm, WebStorm, etc.)
+.idea/
+
+# Visual Studio Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# --- Secrets et configuration sensible ---------------------------------------
+
+# Ne jamais commiter de fichiers contenant des mots de passe ou clés API
+*.env.local
+*.env.prod
+.env.prod.local
