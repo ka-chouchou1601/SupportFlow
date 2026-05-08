@@ -1,20 +1,23 @@
 <?php
 
 /**
- * TicketController — CRUD de l'API REST pour les tickets SupportFlow.
+ * TicketController — CRUD et gestion du cycle de vie des tickets SupportFlow.
  *
- * Expose 3 routes JSON sous le préfixe /api/tickets :
- *  - GET  /api/tickets         : liste filtrée des tickets
- *  - GET  /api/tickets/{id}    : détail d'un ticket avec commentaires et historique
- *  - POST /api/tickets         : création d'un nouveau ticket
+ * Expose 5 routes JSON sous le préfixe /api/tickets :
+ *  - GET   /api/tickets                  : liste filtrée des tickets
+ *  - GET   /api/tickets/{id}             : détail complet (commentaires + historique)
+ *  - POST  /api/tickets                  : création d'un nouveau ticket
+ *  - PATCH /api/tickets/{id}/status      : changement de statut (transitions validées)
+ *  - PATCH /api/tickets/{id}/priority    : changement de priorité
  *
- * Toutes les réponses utilisent JsonResponse avec les codes HTTP sémantiques :
- *  - 200 OK          : ressource retournée avec succès
- *  - 201 Created     : ressource créée avec succès
- *  - 404 Not Found   : ticket introuvable
- *  - 422 Unprocessable Entity : données de formulaire invalides
+ * Codes HTTP utilisés :
+ *  - 200 OK                   : opération réussie (lecture ou mise à jour)
+ *  - 201 Created              : ressource créée avec succès
+ *  - 400 Bad Request          : JSON invalide ou manquant
+ *  - 404 Not Found            : ticket introuvable
+ *  - 422 Unprocessable Entity : données invalides ou transition interdite
  *
- * Prototype : pas d'authentification JWT — le créateur est simulé (premier user en BDD).
+ * Prototype : pas d'authentification JWT — l'utilisateur est simulé (premier user en BDD).
  */
 
 namespace App\Controller\Api;
@@ -32,6 +35,25 @@ use Symfony\Component\Routing\Attribute\Route;
 #[Route('/api/tickets')]
 class TicketController extends AbstractController
 {
+    /**
+     * Table des transitions de statut autorisées.
+     *
+     * Clé   = statut SOURCE (actuel du ticket)
+     * Valeur = tableau des statuts CIBLES autorisés depuis ce statut
+     *
+     * Règles métier encodées :
+     *  - Un ticket "Fermé" est terminal : aucune transition n'en part
+     *  - On peut rouvrir un ticket "Résolu" (→ En cours) s'il n'est pas complètement résolu
+     *  - On ne peut pas passer directement de "Nouveau" à "Résolu" ou "Fermé"
+     *    (forçage du passage par "En cours" pour garantir qu'un agent a traité le ticket)
+     */
+    private const ALLOWED_TRANSITIONS = [
+        'Nouveau'  => ['En cours'],
+        'En cours' => ['Résolu', 'Nouveau'],
+        'Résolu'   => ['En cours', 'Fermé'],
+        'Fermé'    => [],  // statut terminal — aucune sortie possible
+    ];
+
     /**
      * EntityManagerInterface : accès direct à Doctrine pour les requêtes personnalisées.
      * TicketHistoryService   : service d'audit — trace toutes les modifications.
@@ -262,17 +284,9 @@ class TicketController extends AbstractController
         }
 
         // ----- Utilisateur simulé (prototype sans authentification) ----------
-        // Pour le prototype, on récupère le premier utilisateur en base.
+        // Délégué au helper getPrototypeUser() pour éviter la duplication.
         // À remplacer par $this->getUser() une fois JWT configuré.
-        $author = $this->userRepository->findOneBy([]);
-
-        if (null === $author) {
-            // Cas de sécurité : si la base est vide (fixtures non chargées)
-            return $this->json(
-                ['error' => 'Aucun utilisateur en base. Chargez les fixtures.'],
-                Response::HTTP_INTERNAL_SERVER_ERROR
-            );
-        }
+        $author = $this->getPrototypeUser();
 
         // ----- Création du ticket -------------------------------------------
         $ticket = new Ticket();
@@ -302,6 +316,200 @@ class TicketController extends AbstractController
             $this->serializeTicket($ticket),
             Response::HTTP_CREATED  // 201
         );
+    }
+
+    // =========================================================================
+    // PATCH /api/tickets/{id}/status
+    // Changement de statut avec validation des transitions métier
+    // =========================================================================
+
+    /**
+     * Met à jour le statut d'un ticket en respectant les transitions autorisées.
+     *
+     * Format du body JSON :
+     * { "status": "En cours" }
+     *
+     * Le graphe des transitions est défini dans ALLOWED_TRANSITIONS.
+     * Tout saut non autorisé (ex: "Nouveau" → "Fermé") retourne un 422.
+     *
+     * La mise à jour de updatedAt est gérée doublement :
+     *  - explicitement via setUpdatedAt() (intention claire)
+     *  - automatiquement via le lifecycle callback #[PreUpdate] de l'entité
+     *
+     * Codes de retour :
+     *  - 200 OK                   : statut mis à jour, ticket retourné
+     *  - 400 Bad Request          : JSON invalide
+     *  - 404 Not Found            : ticket introuvable
+     *  - 422 Unprocessable Entity : statut invalide ou transition interdite
+     */
+    #[Route('/{id}/status', name: 'api_ticket_update_status', methods: ['PATCH'])]
+    public function updateStatus(int $id, Request $request): JsonResponse
+    {
+        // ----- Récupération du ticket ----------------------------------------
+        $ticket = $this->em->getRepository(Ticket::class)->find($id);
+
+        if (null === $ticket) {
+            return $this->json(
+                ['error' => sprintf('Ticket #%d introuvable', $id)],
+                Response::HTTP_NOT_FOUND
+            );
+        }
+
+        // ----- Décodage du body JSON -----------------------------------------
+        $data = json_decode($request->getContent(), associative: true);
+
+        if (!is_array($data)) {
+            return $this->json(
+                ['error' => 'Corps JSON invalide ou vide'],
+                Response::HTTP_BAD_REQUEST
+            );
+        }
+
+        $newStatus = trim($data['status'] ?? '');
+
+        // ----- Validation du statut cible ------------------------------------
+        if ('' === $newStatus) {
+            return $this->json(
+                ['errors' => ['status' => 'Le statut est obligatoire.']],
+                Response::HTTP_UNPROCESSABLE_ENTITY
+            );
+        }
+
+        if (!in_array($newStatus, Ticket::STATUSES, strict: true)) {
+            return $this->json(
+                ['errors' => ['status' => sprintf(
+                    'Statut invalide. Valeurs acceptées : %s.',
+                    implode(', ', Ticket::STATUSES)
+                )]],
+                Response::HTTP_UNPROCESSABLE_ENTITY
+            );
+        }
+
+        // ----- Validation de la transition -----------------------------------
+        $currentStatus = $ticket->getStatus();
+
+        // Récupère les cibles autorisées depuis le statut actuel.
+        // ?? [] sécurise le cas où currentStatus ne serait pas dans ALLOWED_TRANSITIONS
+        // (données corrompues en BDD) : aucune transition ne serait alors autorisée.
+        $allowedTargets = self::ALLOWED_TRANSITIONS[$currentStatus] ?? [];
+
+        if ($currentStatus === $newStatus) {
+            // Aucune transition nécessaire : le statut est déjà le bon
+            // On retourne le ticket tel quel sans modifier ni l'historique.
+            return $this->json($this->serializeTicket($ticket), Response::HTTP_OK);
+        }
+
+        if (!in_array($newStatus, $allowedTargets, strict: true)) {
+            // Transition explicitement interdite par les règles métier
+            return $this->json(
+                ['error' => sprintf('Transition non autorisée : %s → %s', $currentStatus, $newStatus)],
+                Response::HTTP_UNPROCESSABLE_ENTITY
+            );
+        }
+
+        // ----- Application de la transition ----------------------------------
+        $oldStatus = $currentStatus;
+
+        $ticket->setStatus($newStatus);
+        // Mise à jour explicite de updatedAt — le callback #[PreUpdate] la fera
+        // aussi, mais l'appel ici rend l'intention lisible dans le code métier.
+        $ticket->setUpdatedAt(new \DateTime());
+
+        // flush() déclenche le UPDATE SQL + le lifecycle callback #[PreUpdate]
+        $this->em->flush();
+
+        // Enregistrement dans l'historique APRÈS le flush pour s'assurer que
+        // le ticket est bien persisté avant d'écrire la référence FK dans ticket_history
+        $this->historyService->logStatusChange($ticket, $this->getPrototypeUser(), $oldStatus, $newStatus);
+
+        return $this->json($this->serializeTicket($ticket), Response::HTTP_OK);
+    }
+
+    // =========================================================================
+    // PATCH /api/tickets/{id}/priority
+    // Changement de priorité (pas de contrainte de transition)
+    // =========================================================================
+
+    /**
+     * Met à jour la priorité d'un ticket.
+     *
+     * Contrairement au statut, la priorité n'a pas de graphe de transitions :
+     * on peut passer d'une priorité à n'importe quelle autre à tout moment.
+     * C'est une décision intentionnelle (la priorité est un jugement éditorial,
+     * pas un état dans un workflow).
+     *
+     * Format du body JSON :
+     * { "priority": "Urgente" }
+     *
+     * Codes de retour :
+     *  - 200 OK                   : priorité mise à jour, ticket retourné
+     *  - 400 Bad Request          : JSON invalide
+     *  - 404 Not Found            : ticket introuvable
+     *  - 422 Unprocessable Entity : priorité invalide
+     */
+    #[Route('/{id}/priority', name: 'api_ticket_update_priority', methods: ['PATCH'])]
+    public function updatePriority(int $id, Request $request): JsonResponse
+    {
+        // ----- Récupération du ticket ----------------------------------------
+        $ticket = $this->em->getRepository(Ticket::class)->find($id);
+
+        if (null === $ticket) {
+            return $this->json(
+                ['error' => sprintf('Ticket #%d introuvable', $id)],
+                Response::HTTP_NOT_FOUND
+            );
+        }
+
+        // ----- Décodage du body JSON -----------------------------------------
+        $data = json_decode($request->getContent(), associative: true);
+
+        if (!is_array($data)) {
+            return $this->json(
+                ['error' => 'Corps JSON invalide ou vide'],
+                Response::HTTP_BAD_REQUEST
+            );
+        }
+
+        $newPriority = trim($data['priority'] ?? '');
+
+        // ----- Validation de la priorité -------------------------------------
+        if ('' === $newPriority) {
+            return $this->json(
+                ['errors' => ['priority' => 'La priorité est obligatoire.']],
+                Response::HTTP_UNPROCESSABLE_ENTITY
+            );
+        }
+
+        if (!in_array($newPriority, Ticket::PRIORITIES, strict: true)) {
+            return $this->json(
+                ['errors' => ['priority' => sprintf(
+                    'Priorité invalide. Valeurs acceptées : %s.',
+                    implode(', ', Ticket::PRIORITIES)
+                )]],
+                Response::HTTP_UNPROCESSABLE_ENTITY
+            );
+        }
+
+        // ----- Application du changement -------------------------------------
+        $oldPriority = $ticket->getPriority();
+
+        $ticket->setPriority($newPriority);
+        $ticket->setUpdatedAt(new \DateTime());
+
+        $this->em->flush();
+
+        // Log dans l'historique uniquement si la valeur a réellement changé
+        // (évite les entrées d'historique parasites "Haute → Haute")
+        if ($oldPriority !== $newPriority) {
+            $this->historyService->logPriorityChange(
+                $ticket,
+                $this->getPrototypeUser(),
+                $oldPriority,
+                $newPriority
+            );
+        }
+
+        return $this->json($this->serializeTicket($ticket), Response::HTTP_OK);
     }
 
     // =========================================================================
@@ -339,5 +547,25 @@ class TicketController extends AbstractController
             'createdAt'   => $ticket->getCreatedAt()?->format(\DateTimeInterface::ATOM),
             'updatedAt'   => $ticket->getUpdatedAt()?->format(\DateTimeInterface::ATOM),
         ];
+    }
+
+    /**
+     * Retourne l'utilisateur simulé pour le prototype (premier user en BDD).
+     *
+     * Mutualisé entre create(), updateStatus() et updatePriority() pour éviter
+     * la duplication. À remplacer par $this->getUser() une fois JWT configuré.
+     *
+     * Lève une \RuntimeException si la base est vide (fixtures non chargées) —
+     * cas d'erreur de configuration développeur, pas un cas métier.
+     */
+    private function getPrototypeUser(): \App\Entity\User
+    {
+        $user = $this->userRepository->findOneBy([]);
+
+        if (null === $user) {
+            throw new \RuntimeException('Aucun utilisateur en base. Lancez : php bin/console doctrine:fixtures:load');
+        }
+
+        return $user;
     }
 }
