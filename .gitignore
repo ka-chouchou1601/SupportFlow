@@ -64,3 +64,4 @@ desktop.ini
 .env.prod.local
 
 SupportFlow_Prompts_ClaudeCode.md
+.claude
