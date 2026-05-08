@@ -62,3 +62,5 @@ desktop.ini
 *.env.local
 *.env.prod
 .env.prod.local
+
+SupportFlow_Prompts_ClaudeCode.md

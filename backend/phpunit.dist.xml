@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<!-- https://phpunit.readthedocs.io/en/latest/configuration.html -->
+<!-- ==========================================================================
+     Configuration PHPUnit — SupportFlow
+     https://phpunit.readthedocs.io/en/latest/configuration.html
+
+     Environnement cible : APP_ENV=test (lit .env.test)
+     Base de données     : supportflow_test (MySQL Docker, séparée du dev)
+     Bootstrap           : tests/bootstrap.php (charge .env.test + crée le schéma)
+
+     Lancer les tests    : php bin/phpunit
+     Avec sortie verbose : php bin/phpunit [testdox]
+     Suite seule         : php bin/phpunit tests/Unit
+     ========================================================================== -->
+
 <phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:noNamespaceSchemaLocation="vendor/phpunit/phpunit/phpunit.xsd"
          colors="true"
@@ -13,16 +25,30 @@
     <php>
         <ini name="display_errors" value="1" />
         <ini name="error_reporting" value="-1" />
+
+        <!-- APP_ENV=test : active le chargement de .env.test et les optimisations de test -->
         <server name="APP_ENV" value="test" force="true" />
         <server name="SHELL_VERBOSITY" value="-1" />
+
+        <!-- DATABASE_URL surchargée ici (en plus de .env.test) pour garantir
+             qu'on ne touche jamais la base de développement, même si .env.test
+             n'est pas chargé correctement -->
+        <!-- doctrine.yaml ajoute le suffixe "_test" → base effective : supportflow_db_test -->
+        <server name="DATABASE_URL"
+                value="mysql://supportflow:password@127.0.0.1:3306/supportflow_db?serverVersion=8.0"
+                force="true" />
     </php>
 
     <testsuites>
-        <testsuite name="Project Test Suite">
-            <directory>tests</directory>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Functional">
+            <directory>tests/Functional</directory>
         </testsuite>
     </testsuites>
 
+    <!-- Code source à analyser pour la couverture de code (option: coverage-html) -->
     <source ignoreSuppressionOfDeprecations="true"
             ignoreIndirectDeprecations="true"
             restrictNotices="true"
@@ -32,6 +58,7 @@
             <directory>src</directory>
         </include>
 
+        <!-- Dépréciations Doctrine : filtrées car non-actionables depuis notre code -->
         <deprecationTrigger>
             <method>Doctrine\Deprecations\Deprecation::trigger</method>
             <method>Doctrine\Deprecations\Deprecation::delegateTriggerToBackend</method>
