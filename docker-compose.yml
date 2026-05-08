@@ -67,8 +67,8 @@ services:
     working_dir: /app
 
     # Commande par défaut : garde le conteneur en vie pendant le développement
-    # À remplacer par "npm run dev" une fois le projet React initialisé
-    command: sh -c "echo 'Frontend ready — run: npm create vite@latest . && npm run dev' && tail -f /dev/null"
+    # À remplacer par "npm run dev" une fois le projet React initialisé avec Vite
+    command: tail -f /dev/null
 
     networks:
       - supportflow_network
